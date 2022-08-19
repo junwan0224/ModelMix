@@ -18,6 +18,8 @@ To run the source code, please first install the following packages:
 The three folders correspond to three different codes / projects. Each folder contains another readme file that describes how the code runs.
 
 cifar10main: ModelMix implementation for cifar10.
+
 Handcrafted-DP-main: ModelMix combined with Tramèr and Boneh's feature extraction method.
+
 Gradient-Embedding-Perturbation-master: ModelMix combined with Gradient Embeding Perturbation.
 
