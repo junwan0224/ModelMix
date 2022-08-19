@@ -46,10 +46,32 @@ def prune_grad_val(model, prune_val, train_fc_only=False):
 
 
 def trunc_grad(model, max_val, train_fc_only=False):
+    dev = next(model.parameters()).device
+    clamp_count, total = torch.tensor(0).cuda(dev), torch.tensor(0).cuda(dev)
     for name, param in model.named_parameters():
         if train_fc_only and "linear" not in name:
             continue
+        clamp_count += torch.count_nonzero(param.grad.abs() > max_val)
+        '''
+        total += torch.numel(param.grad)
+        print(name)
+        all_param = torch.flatten(param.grad.abs()).cpu().numpy()
+        print_percentage = [100]
+        for p in print_percentage:
+            percentile_value = np.percentile(all_param, p)
+            print("percent ", p, ": ", percentile_value / 5)
+        '''
         param.grad = param.grad.clamp(min=-max_val, max=max_val)
+    #print(clamp_count / total)
+
+def calc_grad_norm(model):
+    dev = next(model.parameters()).device
+    sum_norm = torch.tensor(0.0).cuda(dev)
+    for name, param in model.named_parameters():
+        norm_val = param.grad.norm(2)
+        sum_norm += norm_val * norm_val
+    sum_norm = torch.sqrt(sum_norm)
+    return sum_norm
 
 
 def normalize_grad(model, clip_norm):
@@ -73,11 +95,10 @@ def generate_mask(model, optimizer, criterion, inputs, targets, mask_percentage)
     loss.backward()
     mask = {}
     for name, param in model.named_parameters():
-        # if "bn" in name or linear" in name: continue
         all_param = torch.cat((all_param, torch.flatten(param.grad.abs())), 0)
     percentile_value = np.percentile(all_param.cpu().numpy(), mask_percentage)
     for name, param in model.named_parameters():
-        # if "bn" in name or linear" in name: continue
+        if "bn" in name or "linear" in name or "fc" in name: continue # uncomment this line
         mask[name] = torch.where(param.grad.abs() < torch.tensor(percentile_value).cuda(dev),
                                  torch.tensor(0.0).cuda(dev), torch.tensor(1.0).cuda(dev))
     return mask
@@ -89,7 +110,7 @@ def multiply_mask(model, mask):
             param.grad = param.grad * mask[name]
 
 
-def model_mix(model, model2, tau, mask, train_fc_only=False):
+def model_mix(model, model2, tau, mask={}, train_fc_only=False):
     dev = next(model.parameters()).device
     dev2 = next(model2.parameters()).device
     if dev != dev2:
@@ -120,7 +141,7 @@ def model_mix(model, model2, tau, mask, train_fc_only=False):
         temp_dict[name] = (oness - alpha) * temp_dict[name] + alpha * temp_dict2[name]
     model.load_state_dict(temp_dict)
 
-def model_momemtum_mix(model, model2, tau, mask, train_fc_only=False):
+def model_momemtum_mix(model, model2, tau, mask={}, train_fc_only=False):
     dev = next(model.parameters()).device
     dev2 = next(model2.parameters()).device
     if dev != dev2:
@@ -209,7 +230,6 @@ def recompute_bn_gradient(model, store_model, criterion, input_group, target_gro
 
 def copy_model(model, model2):
     model.load_state_dict(copy.deepcopy(model2.state_dict()))
-
 
 
 

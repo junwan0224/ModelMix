@@ -8,7 +8,7 @@ the size of the gradients will match it. This means that they get aggregated ove
 Here, we will keep them per-sample i.e., we will have a tensor of size ``[b_sz, m, n]``, where
 the slice ``[i, :, :]`` corresponds to the per-example gradients for the i-th example in the batch.
 
-Per-sample gradient clipping has to be achieved under the following constraints:
+Per-sample gradient clipping has to be achieved under the following constraints:ƒƒ
 
 1. The norm of the grad_sample of the loss with respect to all model parameters has
 to be clipped so that if they were to be put in a single vector together. If ``C`` is the clipping
@@ -34,6 +34,7 @@ Notes:
 from typing import Callable, Iterator, Optional, Tuple
 
 import torch
+import numpy
 from opacus.grad_sample import GradSampleModule
 from torch import nn
 
@@ -80,6 +81,12 @@ class PerSampleGradientClipper:
         self.norm_clipper = norm_clipper
         self.batch_first = batch_first
         self.loss_reduction = loss_reduction
+        self.trunc_ratio = 0.1
+        self.trunc_before = True
+        self.trunc_after = False
+        self.print_trunc_detail = False
+        self.ratio_mix_same = False
+        self.ratio_mix_diff = False
 
         self._reset_aggregated_state()
 
@@ -138,6 +145,8 @@ class PerSampleGradientClipper:
         n = 0
         for _, p in self._named_params():
             p.grad = self._scale_summed_grad(p.summed_grad, batch_size)
+            if self.ratio_mix_same:
+                p.grad = p.grad * torch.rand(p.grad.shape).cuda(p.grad.get_device())
             n += 1
             del p.summed_grad
 
@@ -160,6 +169,15 @@ class PerSampleGradientClipper:
             named_params=self._named_grad_samples(),
             flat=not self.norm_clipper.is_per_layer,
         )
+        
+        if self.ratio_mix_diff:
+            for name, p in self._named_params():
+                p.grad_sample = p.grad_sample * torch.rand(p.grad_sample.shape).cuda(p.grad_sample.get_device())
+        
+        if self.trunc_before:
+            max_val = [max(v, self.norm_clipper.flat_value) * self.trunc_ratio for v in all_norms[0]]
+            for name, p in self._named_params():
+                p.grad_sample = torch.stack([g.clamp(min=-v, max=v) for g, v in zip(p.grad_sample, max_val)])
 
         # step 1: calculate the clipping factors based on the noise
         clipping_factor = self.norm_clipper.calc_clipping_factors(all_norms)
@@ -296,7 +314,21 @@ class PerSampleGradientClipper:
         Returns:
             Weighted sum tensor for ``param`` along the batch dimension weighted by batch_weight.
         """
-        return torch.einsum("i,i...", batch_weight, param)
+        
+        shape_size = batch_weight.shape[0]
+        temp = torch.einsum("i,i...->i...", batch_weight, param)
+        if self.print_trunc_detail and self.trunc_after:
+            all_param = torch.flatten(param.abs()).cpu().numpy()
+            print_percentage = [100]
+            for p in print_percentage:
+                percentile_value = numpy.percentile(all_param, p)
+                print("percent ", p, ": ", percentile_value / self.norm_clipper.flat_value)
+        if self.trunc_after:
+            max_val = self.trunc_ratio * self.norm_clipper.flat_value
+            temp = temp.clamp(min=-max_val, max=max_val)
+        return temp.sum(0).squeeze()
+        
+        #return torch.einsum("i,i...", batch_weight, param)
 
     def _on_batch_clip(
         self,

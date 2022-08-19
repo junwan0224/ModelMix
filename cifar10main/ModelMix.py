@@ -19,28 +19,30 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torchvision import models
+from loader import iid_sample
 from opacus.utils import module_modification
 
-dev = 1
-device = torch.device('cuda:1')
+dev = 0
+device = torch.device('cuda:0')
 
 model_names = sorted(name for name in resnet.__dict__
                      if name.islower() and not name.startswith("__")
                      and name.startswith("resnet")
                      and callable(resnet.__dict__[name]))
 
-use_mix = False
-batch_select = 183
-virtual_bn = 10
-noise_scale = 1.3
+use_mix = True
+use_iid_sample = True
+batch_select = 100
+virtual_bn = 15
+noise_scale = 0.33
 clip_method = 1
 clip_type = 2.0
-clip_norm = 5
-start_lr = 0.1
-gap_rate = 0.05
+clip_norm = 20
+start_lr = 0.15
+gap_rate = 0.15
 multi = noise_scale
 num_epoch = 100
-# print("Imagenet L NORM:",clip_type,"CLIP NORM",clip_norm,"Grouping",batch_select * virtual_bn,"Noise",noise_scale,"Pruning",  prune_percentage, "Num of Epochs",  num_epoch, "Device", dev)
+print("ModelMix", use_mix, "CLIP NORM",clip_norm,"Grouping",batch_select * virtual_bn,"Noise",noise_scale, "Gap",gap_rate, "Device", dev)
 
 
 parser = argparse.ArgumentParser(description='Propert ResNets for CIFAR10 in pytorch')
@@ -115,13 +117,36 @@ def main():
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
-    train_loader = torch.utils.data.DataLoader(
-        datasets.SVHN(root='./data', split='train', transform=transforms.Compose([
+
+
+    train_set = datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(32, 4),
             transforms.ToTensor(),
             normalize,
-        ]), download=True),
+        ]), download=True)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_set, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.workers, pin_memory=True)
+
+    val_loader = torch.utils.data.DataLoader(
+        datasets.CIFAR10(root='./data', train=False, transform=transforms.Compose([
+            transforms.ToTensor(),
+            normalize,
+        ])),
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers, pin_memory=True)
+
+    '''
+    train_set = datasets.SVHN(root='./data', split='train', transform=transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(32, 4),
+            transforms.ToTensor(),
+            normalize,
+        ]), download=True)
+    train_loader = torch.utils.data.DataLoader(
+        train_set,
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
@@ -132,29 +157,7 @@ def main():
         ]), download=True),
         batch_size=1000, shuffle=False,
         num_workers=args.workers, pin_memory=True)
-
-
     '''
-    train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=True),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True)
-
-    val_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root='./data', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
-    '''
-
-
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(device)
 
@@ -165,31 +168,21 @@ def main():
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
-    optimizer2 = torch.optim.SGD(model2.parameters(), args.lr,
-                                 momentum=args.momentum,
-                                 weight_decay=args.weight_decay)
 
-    privacy_engine = PrivacyEngine(model, batch_size=batch_select, sample_size=73260, alphas=range(2, 32),
+    privacy_engine = PrivacyEngine(model, batch_size=batch_select, sample_size=50000, alphas=range(2, 32),
                                    noise_multiplier=multi, max_grad_norm=clip_norm)
     privacy_engine.attach(optimizer)
-    privacy_engine2 = PrivacyEngine(model2, batch_size=batch_select, sample_size=73260, alphas=range(2, 32),
-                                    noise_multiplier=multi, max_grad_norm=clip_norm)
-    privacy_engine2.attach(optimizer2)
 
-    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 150, 250],
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[85],
                                                         last_epoch=args.start_epoch - 1)
-    lr_scheduler2 = torch.optim.lr_scheduler.MultiStepLR(optimizer2, milestones=[100, 150, 250],
-                                                         last_epoch=args.start_epoch - 1)
-    # lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,milestones = [20, 30, 40 ,50, 60, 70 ,80, 90, 100, 110, 120, 130, 140,150,160,170,180, 190], gamma=0.8, last_epoch = args.start_epoch - 1)
-    # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97, last_epoch=args.start_epoch - 1)
+    # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.985, last_epoch=args.start_epoch - 1)
     # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0, T_mult=1, eta_min=0, last_epoch=- 1,verbose=False)
 
     if args.arch in ['resnet1202', 'resnet110']:
         # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
         # then switch back. In this setup it will correspond for first epoch.
-        for param_group in optimizer.param_groups: c
-        param_group['lr'] = args.lr * 0.1
-
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = args.lr * 0.1
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -197,22 +190,11 @@ def main():
 
     for epoch in range(args.start_epoch, args.epochs):
         print(epoch)
-        # train for one epoch
         print('current lr {:.5e}'.format(optimizer.param_groups[0]['lr']))
         # train(train_loader, model, criterion, optimizer, privacy_engine, epoch)
-        '''
-        global gap_rate
-        if epoch < 30:
-            gap_rate = 0.075
-        elif epoch < 100:
-            gap_rate = 0.05
-        else:
-            gap_rate = 0.025
-        '''
 
-        train(train_loader, model, model2, criterion, optimizer, optimizer2, epoch)
+        train(train_set, train_loader, model, model2, criterion, optimizer, epoch)
         lr_scheduler.step()
-        lr_scheduler2.step()
 
         # evaluate on validation set
         prec1 = validate(val_loader, model, criterion)
@@ -256,7 +238,7 @@ def model_mix(model, model2, tau):
 
 
 # def train(train_loader, model, criterion, optimizer, pe, epoch):
-def train(train_loader, model, model2, criterion, optimizer, optimizer2, epoch):
+def train(train_set, train_loader, model, model2, criterion, optimizer, epoch):
     """
         Run one train epoch
     """
@@ -272,10 +254,9 @@ def train(train_loader, model, model2, criterion, optimizer, optimizer2, epoch):
     end = time.time()
     lr_temp = optimizer.param_groups[0]['lr']
     for i, (input, target) in enumerate(tqdm(train_loader)):
-
-        temp_model = model
-        temp_model2 = model2
-        temp_optimizer = optimizer
+        if use_iid_sample:
+            input, target = iid_sample(train_set, batch_select / len(train_set))
+            target = target.type(torch.LongTensor)
 
         # measure data loading time
         data_time.update(time.time() - end)
@@ -286,20 +267,20 @@ def train(train_loader, model, model2, criterion, optimizer, optimizer2, epoch):
         if args.half:
             input_var = input_var.half()
 
-        output = temp_model(input_var)
+        output = model(input_var)
         loss = criterion(output, target_var)
         loss.backward()
         if (i + 1) % virtual_bn == 0:
-            temp_dict = copy.deepcopy(temp_model.state_dict())
+            temp_dict = copy.deepcopy(model.state_dict())
             if use_mix:
-                lr_temp = temp_optimizer.param_groups[0]['lr']
+                lr_temp = optimizer.param_groups[0]['lr']
                 tau = lr_temp * gap_rate
-                model_mix(temp_model, temp_model2, tau)
-            temp_optimizer.step()
-            temp_optimizer.zero_grad()
-            temp_model2.load_state_dict(temp_dict)
+                model_mix(model, model2, tau)
+            optimizer.step()
+            optimizer.zero_grad()
+            model2.load_state_dict(temp_dict)
         else:
-            temp_optimizer.virtual_step()
+            optimizer.virtual_step()
 
         output = output.float()
         loss = loss.float()

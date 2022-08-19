@@ -293,7 +293,7 @@ class CNN(nn.Module):
         self.conv_layer = nn.Sequential(
 
             # Conv Layer block 1
-            nn.Conv2d(in_channels=243, out_channels=32, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1),
@@ -354,7 +354,6 @@ CNNS = {
     "fmnist": MNIST_CNN,
     "mnist": MNIST_CNN,
 }
-
 
 
 

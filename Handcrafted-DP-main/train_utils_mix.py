@@ -2,6 +2,10 @@ import torch
 import math
 import torch.nn.functional as F
 import copy
+import random
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+from opacus.utils import module_modification
 
 
 
@@ -11,8 +15,25 @@ def get_device():
     device = torch.device("cuda" if use_cuda else "cpu")
     return device
 
+def iid_sample(dataset, q):
+    inputs = torch.empty(0)
+    targets = torch.empty(0)
+    n = len(dataset)
+    for i in range(n):
+        r = random.uniform(0, 1)
+        if r > q:
+            continue
+        else:
+            img, tar = dataset.__getitem__(i)
+            inputs = torch.cat((inputs, img.unsqueeze(0)), 0)
+            targets = torch.cat((targets, torch.tensor(tar).unsqueeze(0)), 0)
+    indexes = torch.randperm(inputs.shape[0])
+    inputs = inputs[indexes]
+    targets = targets[indexes]
+    return inputs, targets
 
-def train(model, model2, train_loader, optimizer, optimizer2, epoch, n_acc_steps=1):
+
+def train(model, model2, train_data, train_loader, optimizer, optimizer2, epoch, n_acc_steps=1, use_iid=False):
     device = next(model.parameters()).device
     model.train()
     model2.train()
@@ -38,6 +59,9 @@ def train(model, model2, train_loader, optimizer, optimizer2, epoch, n_acc_steps
             temp_model2 = model
             temp_optimizer = optimizer2
         '''
+        if use_iid:
+            data, target = iid_sample(train_data, float(bs / 50000))
+            print(bs / 50000, data.shape, target.shape)
         temp_model = model
         temp_model2 = model2
         temp_optimizer = optimizer
@@ -130,4 +154,3 @@ def test(model, test_loader):
           f'Accuracy: {correct}/{num_examples} ({test_acc:.2f}%)')
 
     return test_loss, test_acc
-

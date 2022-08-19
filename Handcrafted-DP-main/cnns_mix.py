@@ -136,7 +136,8 @@ def main(dataset, augment=False, use_scattering=True, size=None,
     for epoch in range(0, epochs):
         print(f"\nEpoch: {epoch}")
 
-        train_loss, train_acc = train(model, model2, train_loader, optimizer, optimizer2, epoch, n_acc_steps=n_acc_steps)
+        train_loss, train_acc = train(model, model2, train_data, train_loader, optimizer,
+                                      optimizer2, epoch, n_acc_steps=n_acc_steps, use_iid=False)
         test_loss, test_acc = test(model, test_loader)
         test_loss2, test_acc2 = test(model2, test_loader)
         test_acc = max(test_acc, test_acc2)
@@ -182,7 +183,7 @@ def main(dataset, augment=False, use_scattering=True, size=None,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='fmnist', choices=['cifar10', 'fmnist', 'mnist'])
+    parser.add_argument('--dataset', default='cifar10', choices=['cifar10', 'fmnist', 'mnist'])
     parser.add_argument('--size', default=None)
     parser.add_argument('--augment', default=False, action="store_true")
     parser.add_argument('--use_scattering', default=True, action="store_true")
